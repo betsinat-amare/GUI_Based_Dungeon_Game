@@ -10,15 +10,17 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
 type Player struct {
-	X, Y    int
-	HP      int
-	MaxHP   int
-	Gold    int
-	Potions int
+	X, Y     int
+	HP       int
+	MaxHP    int
+	Gold     int
+	Potions  int
+	Visited  map[string]bool
 }
 
 type Enemy struct {
@@ -27,12 +29,14 @@ type Enemy struct {
 	Attack int
 }
 
-const gridSize = 3
+const gridSize = 4
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
-	a := app.New()
+	a := app.NewWithID("dungeon.gui")
+	a.Settings().SetTheme(theme.DarkTheme())
+
 	w := a.NewWindow("Dungeon Explorer 🏰")
 
 	title := widget.NewLabelWithStyle("Dungeon Explorer 🏰", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
@@ -41,19 +45,29 @@ func main() {
 	startBtn := widget.NewButton("Start Game", func() {
 		startGame(w)
 	})
+	quitBtn := widget.NewButton("Quit", func() {
+		w.Close()
+	})
 
 	menu := container.NewVBox(
 		title,
 		sub,
 		startBtn,
+		quitBtn,
 	)
-	w.SetContent(menu)
-	w.Resize(fyne.NewSize(500, 400))
+
+	w.SetContent(container.NewCenter(menu))
+	w.Resize(fyne.NewSize(600, 500))
 	w.ShowAndRun()
 }
 
 func startGame(w fyne.Window) {
-	player := &Player{X: 1, Y: 1, HP: 100, MaxHP: 100, Gold: 0, Potions: 1}
+	player := &Player{
+		X: 1, Y: 1,
+		HP: 100, MaxHP: 100,
+		Gold: 0, Potions: 1,
+		Visited: map[string]bool{"1,1": true},
+	}
 
 	infoLabel := widget.NewLabel("")
 	logLabel := widget.NewLabel("You enter the dungeon...")
@@ -76,6 +90,12 @@ func startGame(w fyne.Window) {
 		usePotion(player, logLabel, infoLabel)
 	})
 
+	// Menu bar
+	menu := container.NewHBox(
+		widget.NewButton("🔁 Restart", func() { startGame(w) }),
+		widget.NewButton("🚪 Quit", func() { w.Close() }),
+	)
+
 	movement := container.NewGridWithColumns(3,
 		btnLeft,
 		btnDown,
@@ -83,23 +103,24 @@ func startGame(w fyne.Window) {
 	)
 
 	statusBox := container.NewVBox(
+		drawHPBar(player),
 		infoLabel,
 		btnPotion,
-		canvas.NewRectangle(color.NRGBA{200, 200, 200, 255}),
 		logLabel,
 	)
 
 	updateInfo(player, infoLabel)
 
 	content := container.NewVBox(
+		menu,
 		widget.NewLabelWithStyle("Dungeon Explorer 🏰", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		grid,
-		btnUp,
-		movement,
+		container.NewCenter(btnUp),
+		container.NewCenter(movement),
 		statusBox,
 	)
 
-	w.SetContent(content)
+	w.SetContent(container.NewPadded(content))
 }
 
 func drawDungeon(player *Player) *fyne.Container {
@@ -108,10 +129,16 @@ func drawDungeon(player *Player) *fyne.Container {
 	for y := 0; y < gridSize; y++ {
 		row := container.NewGridWithColumns(gridSize)
 		for x := 0; x < gridSize; x++ {
-			rect := canvas.NewRectangle(color.NRGBA{80, 80, 80, 255})
+			key := fmt.Sprintf("%d,%d", x, y)
+			rect := canvas.NewRectangle(color.NRGBA{50, 50, 50, 255})
 			rect.SetMinSize(fyne.NewSize(60, 60))
+
 			if x == player.X && y == player.Y {
-				rect.FillColor = color.NRGBA{0, 255, 0, 255}
+				rect.FillColor = color.NRGBA{0, 255, 0, 255} // Player
+			} else if player.Visited[key] {
+				rect.FillColor = color.NRGBA{70, 70, 150, 255} // Visited
+			} else {
+				rect.FillColor = color.NRGBA{100, 50, 100, 255} // Unvisited
 			}
 			row.Add(rect)
 		}
@@ -122,15 +149,15 @@ func drawDungeon(player *Player) *fyne.Container {
 
 func movePlayer(p *Player, dx, dy int, infoLabel, logLabel *widget.Label, grid *fyne.Container, w fyne.Window) {
 	newX, newY := p.X+dx, p.Y+dy
-
 	if newX < 0 || newX >= gridSize || newY < 0 || newY >= gridSize {
 		logLabel.SetText("You bump into a wall! 🧱")
 		return
 	}
 
 	p.X, p.Y = newX, newY
-	event := randomEvent(p, logLabel, w)
+	p.Visited[fmt.Sprintf("%d,%d", newX, newY)] = true
 
+	event := randomEvent(p, logLabel, w)
 	if event != "" {
 		logLabel.SetText(event)
 	} else {
@@ -143,30 +170,36 @@ func movePlayer(p *Player, dx, dy int, infoLabel, logLabel *widget.Label, grid *
 	grid.Refresh()
 }
 
-func updateInfo(p *Player, label *widget.Label) {
-	label.SetText(fmt.Sprintf("❤️ HP: %d/%d  |  💰 Gold: %d  |  🧪 Potions: %d  |  Position: (%d,%d)", p.HP, p.MaxHP, p.Gold, p.Potions, p.X, p.Y))
+func drawHPBar(p *Player) *canvas.Rectangle {
+	ratio := float64(p.HP) / float64(p.MaxHP)
+	width := float32(300 * ratio)
+	bar := canvas.NewRectangle(color.NRGBA{255, 0, 0, 255})
+	bar.SetMinSize(fyne.NewSize(width, 15))
+	return bar
 }
 
-// -------------------------
-// Random events and combat
-// -------------------------
+func updateInfo(p *Player, label *widget.Label) {
+	label.SetText(fmt.Sprintf("❤️ HP: %d/%d | 💰 Gold: %d | 🧪 Potions: %d | 📍 (%d,%d)",
+		p.HP, p.MaxHP, p.Gold, p.Potions, p.X, p.Y))
+}
+
 func randomEvent(p *Player, logLabel *widget.Label, w fyne.Window) string {
 	r := rand.Intn(100)
 
 	switch {
-	case r < 40:
+	case r < 35:
 		enemy := Enemy{Name: randomEnemy(), HP: 20 + rand.Intn(20), Attack: 5 + rand.Intn(5)}
 		combat(p, enemy, logLabel, w)
 		return ""
-	case r < 70:
+	case r < 65:
 		goldFound := 5 + rand.Intn(15)
 		p.Gold += goldFound
 		return fmt.Sprintf("💰 You found %d gold!", goldFound)
-	case r < 90:
+	case r < 85:
 		p.Potions++
 		return "🧪 You found a potion!"
 	default:
-		return "The room is empty and silent..."
+		return "The room is eerily quiet..."
 	}
 }
 
@@ -179,7 +212,7 @@ func combat(p *Player, e Enemy, logLabel *widget.Label, w fyne.Window) {
 
 		e.HP -= damageToEnemy
 		if e.HP <= 0 {
-			logLabel.SetText(fmt.Sprintf("💀 You defeated the %s!", e.Name))
+			logLabel.SetText(fmt.Sprintf("💀 You defeated the %s! +10 gold", e.Name))
 			p.Gold += 10
 			return
 		}
@@ -214,9 +247,8 @@ func showGameOver(w fyne.Window) {
 	restartBtn := widget.NewButton("Restart", func() {
 		startGame(w)
 	})
-
 	content := container.NewVBox(label, restartBtn)
-	w.SetContent(content)
+	w.SetContent(container.NewCenter(content))
 }
 
 func randomEnemy() string {
